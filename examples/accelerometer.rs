@@ -1,8 +1,5 @@
-use std::fs::File;
 use tempfile::tempdir;
-use arrow::util::pretty::print_batches;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use fletch::{fletch_schema, FletchType, FletchWorkspace, FletchViewBuilder};
+use fletch::{fletch_schema, FletchWorkspace, FletchViewBuilder};
 
 fletch_schema! {
     AccelerometerTelemetry {
@@ -28,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
     println!("Initializing Zero-Config HIL Logging to: {}", uri);
 
     // ==========================================
-    // 1. ASYNC SETUP: Initialize Iceberg Schemas
+    // 1. SETUP
     // ==========================================
     let workspace = FletchWorkspace::builder()
         .uri(&uri)
@@ -38,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
     let mut pwr_stream = PowerSupplyTelemetry::try_new(&workspace, run_id).await?;
 
     // ==========================================
-    // 2. SYNCHRONOUS LOGGING (The Fast Path)
+    // 2. LOGGING
     // ==========================================
     println!("Generating 100,000 samples at mixed rates...");
     let start_ts: i64 = 1_718_000_000_000;
@@ -67,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
     println!("Successfully wrote telemetry and committed Iceberg transactions.\n");
 
     // ==========================================
-    // 4. DATA EXPLORATION (The View Builder)
+    // 4. VIEW BUILDER
     // ==========================================
     println!("Building Analytical Views using Polars...\n");
     let view_accel = FletchViewBuilder::new(&workspace)
