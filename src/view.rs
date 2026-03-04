@@ -5,6 +5,8 @@ use ::iceberg::{Catalog, CatalogBuilder, TableIdent};
 use ::iceberg::table::Table;
 use iceberg_catalog_sql::{SqlCatalogBuilder, SQL_CATALOG_PROP_URI, SQL_CATALOG_PROP_WAREHOUSE};
 use polars::prelude::*;
+use std::fs::File;
+use std::path::Path;
 
 use crate::workspace::FletchWorkspace;
 
@@ -42,14 +44,16 @@ impl<'a> FletchViewBuilder<'a> {
     }
 
     pub async fn build(self) -> Result<FletchView> {
-        let run_id = self.run_id.ok_or_else(|| anyhow!("run_id must be specified"))?;
         if self.sources.is_empty() {
             return Err(anyhow!("At least one source must be added to the view"));
         }
+
         let uri = self.workspace.uri();
         let os_path = uri.strip_prefix("file:///").unwrap_or(uri);
         let catalog = Self::load_catalog(uri, os_path).await?;
+
         let mut base_lf: Option<LazyFrame> = None;
+
         for source in self.sources {
             let table_ident = TableIdent::new(self.workspace.namespace().clone(), source.table_name.clone());
             let table = catalog.load_table(&table_ident).await
@@ -60,13 +64,14 @@ impl<'a> FletchViewBuilder<'a> {
             }
             let mut lfs = Vec::new();
             for file_path in file_paths {
-                let mut scan_args = ScanArgsParquet::default();
-                scan_args.n_rows = None;
+                let scan_args = ScanArgsParquet { n_rows: None, ..Default::default() };
                 lfs.push(LazyFrame::scan_parquet(PlRefPath::new(&file_path), scan_args)?);
             }
-            let mut lf = concat(lfs, Default::default())?
-                .filter(col("run_id").eq(lit(run_id.clone())));
-            let mut selection = vec![col("timestamp_ns")];
+            let mut lf = concat(lfs, Default::default())?;
+            if let Some(ref r_id) = self.run_id {
+                lf = lf.filter(col("run_id").eq(lit(r_id.clone())));
+            }
+            let mut selection = vec![col("timestamp_ns"), col("run_id")];
             for c in source.columns {
                 selection.push(col(&c));
             }
@@ -75,6 +80,8 @@ impl<'a> FletchViewBuilder<'a> {
             if let Some(existing_lf) = base_lf {
                 let asof_options = AsOfOptions {
                     strategy: AsofStrategy::Backward,
+                    left_by: Some(vec!["run_id".into()]),
+                    right_by: Some(vec!["run_id".into()]),
                     ..Default::default()
                 };
                 let join_args = JoinArgs::new(JoinType::AsOf(Box::new(asof_options)));
@@ -136,5 +143,22 @@ impl FletchView {
 
     pub fn into_lazy(self) -> LazyFrame {
         self.lazy_frame
+    }
+    pub fn to_csv<P: AsRef<Path>>(self, path: P) -> Result<()> {
+        let mut df = self.collect()?;
+        let mut file = File::create(path).map_err(|e| anyhow!("Failed to create CSV file: {}", e))?;
+        CsvWriter::new(&mut file)
+            .include_header(true)
+            .finish(&mut df)
+            .map_err(|e| anyhow!("Failed to write CSV: {}", e))?;
+        Ok(())
+    }
+    pub fn to_parquet<P: AsRef<Path>>(self, path: P) -> Result<()> {
+        let mut df = self.collect()?;
+        let mut file = File::create(path).map_err(|e| anyhow!("Failed to create Parquet file: {}", e))?;
+        ParquetWriter::new(&mut file)
+            .finish(&mut df)
+            .map_err(|e| anyhow!("Failed to write Parquet: {}", e))?;
+        Ok(())
     }
 }

@@ -69,10 +69,9 @@ impl BackgroundSink {
                         let field_id = (col_idx + 1) as i32;
                         *column_sizes.entry(field_id).or_insert(0) += column.compressed_size() as u64;
                         *value_counts.entry(field_id).or_insert(0) += row_group.num_rows() as u64;
-                        if let Some(stats) = column.statistics() {
-                            if let Some(null_count) = stats.null_count_opt() {
-                                *null_value_counts.entry(field_id).or_insert(0) += null_count;
-                            }
+                        if let Some(stats) = column.statistics()
+                            && let Some(null_count) = stats.null_count_opt() {
+                            *null_value_counts.entry(field_id).or_insert(0) += null_count;
                         }
                     }
                 }
