@@ -1,6 +1,6 @@
 use anyhow::Result;
 use arrow::array::{Array, Float64Array, Int64Array};
-use fletch::{fletch_schema, FletchType, FletchWorkspace}; // Added FletchWorkspace
+use fletch::{fletch_schema, FletchWorkspace};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
 use tempfile::tempdir;
@@ -13,7 +13,6 @@ fletch_schema! {
 }
 fn read_parquet_batch(dir: &std::path::Path) -> Result<arrow::record_batch::RecordBatch> {
     let data_dir = dir.join("TestTelemetry/data");
-
     let mut file_path = None;
     if data_dir.exists() {
         for entry in std::fs::read_dir(&data_dir)? {
