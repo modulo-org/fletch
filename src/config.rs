@@ -28,7 +28,8 @@ impl FletchConfig {
         arrow_schema: Arc<ArrowSchema>
     ) -> Result<Self> {
         let uri = workspace.uri();
-        let (store, catalog) = Self::infer_environment(uri).await?;
+        let catalog_name = workspace.catalog();
+        let (store, catalog) = Self::infer_environment(catalog_name, uri).await?;
         let namespace = workspace.namespace().clone();
         let table_ident = TableIdent::new(namespace.clone(), table_name.to_string());
         let iceberg_schema = Self::arrow_to_iceberg(&arrow_schema)?;
@@ -57,7 +58,7 @@ impl FletchConfig {
         })
     }
 
-    async fn infer_environment(uri: &str) -> Result<(Arc<dyn ObjectStore>, Arc<dyn Catalog>)> {
+    async fn infer_environment(catalog_name: &str, uri: &str) -> Result<(Arc<dyn ObjectStore>, Arc<dyn Catalog>)> {
         if uri.starts_with("file://") {
             let path = uri.strip_prefix("file:///").or_else(|| uri.strip_prefix("file://")).unwrap();
             let os_path = if cfg!(windows) {
@@ -74,7 +75,7 @@ impl FletchConfig {
             let catalog_url = format!("sqlite:{}", db_path.to_string_lossy());
             let catalog = SqlCatalogBuilder::default()
                 .load(
-                    "local_hil",
+                    catalog_name,
                     HashMap::from([
                         (SQL_CATALOG_PROP_URI.to_string(), catalog_url),
                         (SQL_CATALOG_PROP_WAREHOUSE.to_string(), uri.to_string()),

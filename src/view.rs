@@ -56,8 +56,9 @@ impl<'a> FletchViewBuilder<'a> {
         }
 
         let uri = self.workspace.uri();
+        let catalog_name = self.workspace.catalog();
         let os_path = uri.strip_prefix("file:///").unwrap_or(uri);
-        let catalog = Self::load_catalog(uri, os_path).await?;
+        let catalog = Self::load_catalog(catalog_name, uri, os_path).await?;
 
         let mut base_lf: Option<LazyFrame> = None;
 
@@ -117,12 +118,12 @@ impl<'a> FletchViewBuilder<'a> {
         })
     }
 
-    async fn load_catalog(uri: &str, os_path: &str) -> Result<impl Catalog> {
+    async fn load_catalog(catalog_name: &str, uri: &str, os_path: &str) -> Result<impl Catalog> {
         let db_path = std::path::Path::new(os_path).join("iceberg_catalog.db");
         let catalog_url = format!("sqlite:{}", db_path.to_string_lossy());
         SqlCatalogBuilder::default()
             .load(
-                "local_hil",
+                catalog_name,
                 HashMap::from([
                     (SQL_CATALOG_PROP_URI.to_string(), catalog_url),
                     (SQL_CATALOG_PROP_WAREHOUSE.to_string(), uri.to_string()),

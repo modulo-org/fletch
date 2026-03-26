@@ -5,6 +5,7 @@ use iceberg::NamespaceIdent;
 pub struct FletchWorkspaceBuilder {
     uri: Option<String>,
     namespace_levels: Vec<String>,
+    catalog: Option<String>
 }
 
 impl FletchWorkspaceBuilder {
@@ -27,6 +28,11 @@ impl FletchWorkspaceBuilder {
         self
     }
 
+    pub fn catalog(mut self, catalog: impl Into<String>) -> Self {
+        self.catalog = Some(catalog.into());
+        self
+    }
+
     pub fn build(self) -> Result<FletchWorkspace> {
         let uri = self.uri.ok_or_else(|| anyhow!("Workspace URI is required. Use .uri() to set it."))?;
         if self.namespace_levels.is_empty() {
@@ -35,9 +41,11 @@ impl FletchWorkspaceBuilder {
         let refs: Vec<&str> = self.namespace_levels.iter().map(AsRef::as_ref).collect();
         let namespace = NamespaceIdent::from_strs(refs)
             .map_err(|e| anyhow!("Invalid namespace format provided to workspace: {}", e))?;
+        let catalog = self.catalog.unwrap_or_else(|| "fletch_catalog".into());
         Ok(FletchWorkspace {
             uri,
             namespace,
+            catalog
         })
     }
 }
@@ -45,6 +53,7 @@ impl FletchWorkspaceBuilder {
 pub struct FletchWorkspace {
     uri: String,
     namespace: NamespaceIdent,
+    catalog: String,
 }
 
 impl FletchWorkspace {
@@ -59,4 +68,6 @@ impl FletchWorkspace {
     pub fn namespace(&self) -> &NamespaceIdent {
         &self.namespace
     }
+
+    pub fn catalog(&self) -> &str { &self.catalog }
 }
