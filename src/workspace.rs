@@ -1,11 +1,9 @@
-use anyhow::{anyhow, Result};
-use iceberg::NamespaceIdent;
+use anyhow::{Result, anyhow};
+use std::path::{Path, PathBuf};
 
 #[derive(Default, Clone)]
 pub struct FletchWorkspaceBuilder {
-    uri: Option<String>,
-    namespace_levels: Vec<String>,
-    catalog: Option<String>
+    root: Option<PathBuf>,
 }
 
 impl FletchWorkspaceBuilder {
@@ -13,47 +11,23 @@ impl FletchWorkspaceBuilder {
         Self::default()
     }
 
-    pub fn uri(mut self, uri: impl Into<String>) -> Self {
-        self.uri = Some(uri.into());
-        self
-    }
-
-    pub fn namespace(mut self, levels: &[&str]) -> Self {
-        self.namespace_levels = levels.iter().map(|s| s.to_string()).collect();
-        self
-    }
-
-    pub fn add_namespace_level(mut self, level: impl Into<String>) -> Self {
-        self.namespace_levels.push(level.into());
-        self
-    }
-
-    pub fn catalog(mut self, catalog: impl Into<String>) -> Self {
-        self.catalog = Some(catalog.into());
+    pub fn root(mut self, root: impl AsRef<Path>) -> Self {
+        self.root = Some(root.as_ref().to_path_buf());
         self
     }
 
     pub fn build(self) -> Result<FletchWorkspace> {
-        let uri = self.uri.ok_or_else(|| anyhow!("Workspace URI is required. Use .uri() to set it."))?;
-        if self.namespace_levels.is_empty() {
-            return Err(anyhow!("At least one namespace level is required to organize your telemetry."));
-        }
-        let refs: Vec<&str> = self.namespace_levels.iter().map(AsRef::as_ref).collect();
-        let namespace = NamespaceIdent::from_strs(refs)
-            .map_err(|e| anyhow!("Invalid namespace format provided to workspace: {}", e))?;
-        let catalog = self.catalog.unwrap_or_else(|| "fletch_catalog".into());
-        Ok(FletchWorkspace {
-            uri,
-            namespace,
-            catalog
-        })
+        let root = self
+            .root
+            .ok_or_else(|| anyhow!("workspace root is required. Use .root() to set it."))?;
+        std::fs::create_dir_all(&root)?;
+        Ok(FletchWorkspace { root })
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct FletchWorkspace {
-    uri: String,
-    namespace: NamespaceIdent,
-    catalog: String,
+    root: PathBuf,
 }
 
 impl FletchWorkspace {
@@ -61,13 +35,7 @@ impl FletchWorkspace {
         FletchWorkspaceBuilder::new()
     }
 
-    pub fn uri(&self) -> &str {
-        &self.uri
+    pub fn root(&self) -> &Path {
+        &self.root
     }
-
-    pub fn namespace(&self) -> &NamespaceIdent {
-        &self.namespace
-    }
-
-    pub fn catalog(&self) -> &str { &self.catalog }
 }

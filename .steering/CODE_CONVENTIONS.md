@@ -4,37 +4,36 @@
 
 - Use `cargo fmt` formatting.
 - Keep the public API builder-oriented and ergonomic for test-engineering workflows.
-- Prefer explicit domain names for workspaces, runs, streams, catalog records, storage layout, timestamps, and analytical views.
+- Prefer explicit domain names for workspaces, runs, streams, storage layout, timestamps, file metadata, and analytical views.
 - Use `anyhow::Result` consistently for the current library surface unless a typed error boundary is introduced across the crate.
-- Keep module boundaries narrow: workspace/run setup, storage config, macro-generated ingestion, background sink, catalog metadata, and optional views should stay separately owned.
-- Add concise comments only for non-obvious Arrow, Parquet, SQLite migration, or Polars join behavior.
+- Keep module boundaries narrow: workspace setup, storage config, dynamic stream ingestion, background sink, file metadata, and optional views should stay separately owned.
+- Add concise comments only for non-obvious Arrow, Parquet, or Polars join behavior.
 
 ## Data And Storage Practices
 
-- Treat `timestamp_ns` and `run_id` as stable leading columns in generated telemetry schemas.
-- Preserve stream names from `fletch_schema!` struct identifiers unless a deliberate migration path is added.
-- Keep local workspace paths represented as `file://` URIs at public boundaries and convert to paths at filesystem boundaries.
-- Preserve the default partition layout semantics: project, date, run, stream, and unique Parquet file names.
+- Treat `timestamp_ns` as the stable leading column in generated telemetry schemas.
+- Preserve stream names from dynamic builder names or `FletchSchema` struct identifiers unless a deliberate migration path is added.
+- Keep local workspace roots represented as filesystem paths at public boundaries.
+- Preserve the default layout semantics: run, stream, and unique Parquet file names.
 - Sanitize path components before rendering storage layout values.
-- Keep catalog updates aligned with file writes: runs, run metadata, file rows, row counts, timestamp bounds, file sizes, schema hashes, and content hashes should describe the stored Parquet files accurately.
-- Avoid exposing SQLite internals in the public API unless the catalog contract is intentionally expanded.
-- For schema or catalog changes, include a migration path that preserves existing local workspaces where practical.
+- Store user metadata as Parquet file-level string key/value pairs.
+- Avoid adding sidecar database/catalog dependencies unless the storage contract is intentionally expanded.
+- For schema or storage layout changes, include a migration path that preserves existing local workspaces where practical.
 
 ## Ingestion And View Practices
 
-- Keep `fletch_schema!` generated streams strongly typed through `FletchType` instead of ad hoc dynamic values.
+- Keep dynamic streams typed through `FletchType` instead of ad hoc values.
 - Maintain sparse row behavior: multiple field writes at the same timestamp produce one row, missing fields remain null, and duplicate field writes at a timestamp use the latest value.
 - Keep batches sorted by `timestamp_ns` before writing.
-- Respect `FlushPolicy`: `flush_rows` must remain positive, and interval-based flushing should not emit empty batches.
 - Ensure empty streams can close cleanly without writing Parquet files.
 - Keep the Polars-backed view layer behind the `view` feature.
-- Preserve run filtering by `project_id`, `run_id`, and metadata filters so views do not accidentally cross projects.
+- Preserve run filtering by `run_id` so views do not accidentally cross runs.
 - Use ASOF joins intentionally for time-aligned multi-stream views and keep join-by-run semantics explicit.
 
 ## Verification
 
 - Run `cargo fmt`.
 - Run `cargo test`.
-- Run `cargo test --features view` when changing view, catalog filtering, or public examples that use `FletchViewBuilder`.
+- Run `cargo check --features view` when changing view behavior or public examples that use `FletchViewBuilder`.
 - Run `cargo clippy --all-targets --all-features` when practical.
-- Use temporary directories in tests for filesystem/catalog behavior.
+- Use temporary directories in tests for filesystem behavior.

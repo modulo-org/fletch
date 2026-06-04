@@ -5,21 +5,25 @@ edition = "2024"
 description = "High-throughput, data logger for test engineering and HIL platforms."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Ruben1729/fletch"
-keywords = ["telemetry", "iceberg", "arrow", "hil", "polars"]
+keywords = ["telemetry", "parquet", "arrow", "hil", "polars"]
 categories = ["science", "embedded", "database"]
+
+[features]
+default = []
+view = ["dep:polars"]
+
+[[example]]
+name = "accelerometer"
+required-features = ["view"]
 
 [dependencies]
 arrow = "58.0.0"
-parquet = { version = "58.0.0", features = ["arrow", "async"] }
-object_store = { version = "0.13.1", features = ["aws"] }
+parquet = { version = "58.0.0", features = ["arrow"] }
 anyhow = "1.0"
-iceberg = "0.8.0"
-iceberg-catalog-sql = "0.8.0"
 tokio = { version = "1.49.0", features = ["full"] }
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"] }
 uuid = { version = "1.21.0", features = ["v4"] }
-futures = "0.3.32"
-polars = { version = "0.53.0", features = ["lazy", "parquet", "asof_join"] }
+polars = { version = "0.53.0", features = ["lazy", "parquet", "asof_join"], optional = true }
+fletch-derive = { path = "fletch-derive" }
 
 [dev-dependencies]
 tempfile = "3.10"

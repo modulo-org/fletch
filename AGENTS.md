@@ -15,20 +15,21 @@ Local instructions in this file override shared and workspace instructions.
 
 ## Repository Role
 
-`fletch` is the Rust telemetry logging, local catalog, Parquet storage, and
-sensor-fusion library for HIL and test-engineering data.
+`fletch` is the Rust telemetry logging, Parquet storage, and sensor-fusion
+library for HIL and test-engineering data.
 
-- `fletch_schema!` generates strongly typed ingestion streams backed by Apache Arrow builders.
-- `FletchRun` and `FletchWorkspace` own run setup, metadata, local workspace paths, and storage layout.
-- The SQLite catalog tracks runs, run metadata, and written Parquet files.
+- `FletchStreamBuilder` builds dynamic ingestion streams backed by Apache Arrow builders.
+- `Stream<T>` and `#[derive(FletchSchema)]` provide a typed facade for static schemas.
+- `FletchWorkspace` owns the local root folder and storage layout.
+- Parquet file-level key/value metadata stores run and user-provided metadata.
 - The optional `view` feature enables Polars-backed analytical views and time-aligned joins.
 
 ## Data Rules
 
-- Keep `timestamp_ns` and `run_id` as stable leading columns in generated telemetry schemas.
-- Keep stream names, schema hashes, storage paths, catalog rows, row counts, timestamp bounds, file sizes, and content hashes aligned with the written Parquet files.
+- Keep `timestamp_ns` as the stable leading column in generated telemetry schemas.
+- Keep stream names, storage paths, and file-level metadata aligned with the written Parquet files.
 - Preserve sparse-row semantics: same-timestamp field writes coalesce into one row, missing fields remain null, and duplicate field writes keep the latest value.
-- Keep local workspace roots represented as `file://` URIs at public boundaries and convert to filesystem paths at storage boundaries.
+- Keep local workspace roots as filesystem paths at public boundaries.
 - Keep the Polars view layer behind the `view` feature.
 
 ## Commands
