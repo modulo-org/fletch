@@ -1,42 +1,33 @@
+use fletch::{FletchSchema, FletchViewBuilder, FletchWorkspace, Stream};
 use tempfile::tempdir;
-use fletch::{fletch_schema, FletchWorkspace, FletchViewBuilder};
 
-fletch_schema! {
-    AccelerometerTelemetry {
-        accel_x: f64,
-        accel_y: f64,
-        accel_z: f64,
-    }
+#[derive(FletchSchema)]
+struct AccelerometerTelemetry {
+    accel_x: f64,
+    accel_y: f64,
+    accel_z: f64,
 }
 
-fletch_schema! {
-    PowerSupplyTelemetry {
-        voltage: f64,
-        current_consumption: f64,
-    }
+#[derive(FletchSchema)]
+struct PowerSupplyTelemetry {
+    voltage: f64,
+    current_consumption: f64,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let dir = tempdir()?;
-    let uri = format!("file:///{}", dir.path().to_string_lossy().replace("\\", "/"));
     let run_id = "run_001";
 
-    println!("Initializing Zero-Config HIL Logging to: {}", uri);
+    println!(
+        "Initializing zero-config HIL logging to: {}",
+        dir.path().display()
+    );
 
-    // ==========================================
-    // 1. SETUP
-    // ==========================================
-    let workspace = FletchWorkspace::builder()
-        .uri(&uri)
-        .namespace(&["some_project", "some_test"])
-        .build()?;
-    let mut accel_stream = AccelerometerTelemetry::try_new(&workspace, run_id).await?;
-    let mut pwr_stream = PowerSupplyTelemetry::try_new(&workspace, run_id).await?;
+    let workspace = FletchWorkspace::builder().root(dir.path()).build()?;
+    let mut accel_stream = Stream::<AccelerometerTelemetry>::try_new(&workspace, run_id).await?;
+    let mut pwr_stream = Stream::<PowerSupplyTelemetry>::try_new(&workspace, run_id).await?;
 
-    // ==========================================
-    // 2. LOGGING
-    // ==========================================
     println!("Generating 100,000 samples at mixed rates...");
     let start_ts: i64 = 1_718_000_000_000;
     let num_samples = 100_000;
@@ -56,17 +47,11 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // ==========================================
-    // 3. CLEAN SHUTDOWN
-    // ==========================================
     accel_stream.close()?;
     pwr_stream.close()?;
-    println!("Successfully wrote telemetry and committed Iceberg transactions.\n");
+    println!("Successfully wrote telemetry to Parquet.\n");
 
-    // ==========================================
-    // 4. VIEW BUILDER
-    // ==========================================
-    println!("Building Analytical Views using Polars...\n");
+    println!("Building analytical views using Polars...\n");
     let view_accel = FletchViewBuilder::new(&workspace)
         .run_id(run_id)
         .add_source("AccelerometerTelemetry", &["accel_x", "accel_z"])
@@ -76,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
     let df_accel = view_accel.collect()?;
     println!("--- View 1: Accelerometer (X, Z only) ---");
     println!("{}", df_accel.head(Some(10)));
-    println!("\n");
+    println!();
 
     let view_pwr = FletchViewBuilder::new(&workspace)
         .run_id(run_id)
@@ -87,9 +72,10 @@ async fn main() -> anyhow::Result<()> {
     let df_pwr = view_pwr.collect()?;
     println!("--- View 2: Power Supply ---");
     println!("{}", df_pwr.head(Some(10)));
-    println!("\n");
+    println!();
 
     let view_fusion = FletchViewBuilder::new(&workspace)
+        .run_id(run_id)
         .add_source("AccelerometerTelemetry", &["accel_z"])
         .add_source("PowerSupplyTelemetry", &["voltage"])
         .with_relative_timestamp()
@@ -99,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
     let df_fusion = view_fusion.collect()?;
     println!("--- View 3: Sensor Fusion (Accel Z + Voltage) ---");
     println!("{}", df_fusion.head(Some(10)));
-    println!("\n");
+    println!();
 
     Ok(())
 }

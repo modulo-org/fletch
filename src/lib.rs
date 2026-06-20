@@ -1,12 +1,18 @@
-pub mod macros;
-mod types;
-mod sink;
 mod config;
-mod workspace;
+mod sink;
+mod stream;
+mod types;
+#[cfg(feature = "view")]
 mod view;
+mod workspace;
 
-pub use types::FletchType;
-pub use sink::*;
+pub type Result<T> = anyhow::Result<T>;
+
 pub use config::*;
-pub use workspace::*;
+pub use fletch_derive::FletchSchema;
+pub use sink::*;
+pub use stream::*;
+pub use types::FletchType;
+#[cfg(feature = "view")]
 pub use view::*;
+pub use workspace::*;

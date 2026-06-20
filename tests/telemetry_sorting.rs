@@ -1,18 +1,39 @@
 use anyhow::Result;
 use arrow::array::{Array, Float64Array, Int64Array};
-use fletch::{fletch_schema, FletchWorkspace};
+use fletch::{FletchSchema, FletchStreamBuilder, FletchWorkspace, Stream};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::file::reader::{FileReader, SerializedFileReader};
+use std::collections::BTreeMap;
 use std::fs::File;
+use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
-fletch_schema! {
-    TestTelemetry {
-        sensor_a: f64,
-        sensor_b: f64,
-    }
+#[derive(FletchSchema)]
+struct TestTelemetry {
+    sensor_a: f64,
+    sensor_b: f64,
 }
-fn read_parquet_batch(dir: &std::path::Path) -> Result<arrow::record_batch::RecordBatch> {
-    let data_dir = dir.join("TestTelemetry/data");
+
+#[derive(FletchSchema)]
+struct AuxiliaryTelemetry {
+    reference: f64,
+}
+
+fn read_parquet_batch(
+    dir: &Path,
+    run_id: &str,
+    stream_name: &str,
+) -> Result<arrow::record_batch::RecordBatch> {
+    let path = first_parquet_file(dir, run_id, stream_name)?;
+    let file = File::open(&path)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    let mut reader = builder.build()?;
+    let batch = reader.next().unwrap()?;
+    Ok(batch)
+}
+
+fn first_parquet_file(dir: &Path, run_id: &str, stream_name: &str) -> Result<PathBuf> {
+    let data_dir = dir.join("runs").join(run_id).join(stream_name);
     let mut file_path = None;
     if data_dir.exists() {
         for entry in std::fs::read_dir(&data_dir)? {
@@ -24,32 +45,31 @@ fn read_parquet_batch(dir: &std::path::Path) -> Result<arrow::record_batch::Reco
             }
         }
     }
-    let path = file_path.ok_or_else(|| anyhow::anyhow!("No parquet file found in {:?}", data_dir))?;
-    let file = File::open(&path)?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-    let mut reader = builder.build()?;
-    let batch = reader.next().unwrap()?;
-    Ok(batch)
+    file_path.ok_or_else(|| anyhow::anyhow!("no parquet file found in {:?}", data_dir))
 }
 
 #[tokio::test]
 async fn test_out_of_order_timestamps_are_sorted() -> Result<()> {
     let dir = tempdir()?;
-    let uri = format!("file:///{}", dir.path().to_string_lossy().replace("\\", "/"));
     let run_id = "test_run_out_of_order";
-    let workspace = FletchWorkspace::builder()
-        .uri(&uri)
-        .namespace(&["test_project", "test_suite"])
-        .build()?;
-    let mut stream = TestTelemetry::try_new(&workspace, run_id).await?;
+    let workspace = FletchWorkspace::builder().root(dir.path()).build()?;
+    let mut stream = Stream::<TestTelemetry>::try_new(&workspace, run_id).await?;
     stream.sensor_a(150, 1.5)?;
     stream.sensor_a(100, 1.0)?;
     stream.sensor_a(200, 2.0)?;
-    stream.sensor_a(50,  0.5)?;
+    stream.sensor_a(50, 0.5)?;
     stream.close()?;
-    let batch = read_parquet_batch(dir.path())?;
-    let ts_array = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
-    let val_array = batch.column(2).as_any().downcast_ref::<Float64Array>().unwrap();
+    let batch = read_parquet_batch(dir.path(), run_id, "TestTelemetry")?;
+    let ts_array = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    let val_array = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
     assert_eq!(batch.num_rows(), 4);
     assert_eq!(ts_array.value(0), 50);
     assert_eq!(ts_array.value(1), 100);
@@ -65,21 +85,25 @@ async fn test_out_of_order_timestamps_are_sorted() -> Result<()> {
 #[tokio::test]
 async fn test_sparse_data_with_nulls() -> Result<()> {
     let dir = tempdir()?;
-    let uri = format!("file:///{}", dir.path().to_string_lossy().replace("\\", "/"));
     let run_id = "test_run_sparse";
-    let workspace = FletchWorkspace::builder()
-        .uri(&uri)
-        .namespace(&["test_project", "test_suite"])
-        .build()?;
-    let mut stream = TestTelemetry::try_new(&workspace, run_id).await?;
+    let workspace = FletchWorkspace::builder().root(dir.path()).build()?;
+    let mut stream = Stream::<TestTelemetry>::try_new(&workspace, run_id).await?;
     stream.sensor_a(100, 10.0)?;
     stream.sensor_b(100, 20.0)?;
     stream.sensor_a(110, 11.0)?;
     stream.sensor_b(120, 22.0)?;
     stream.close()?;
-    let batch = read_parquet_batch(dir.path())?;
-    let a_array = batch.column(2).as_any().downcast_ref::<Float64Array>().unwrap();
-    let b_array = batch.column(3).as_any().downcast_ref::<Float64Array>().unwrap();
+    let batch = read_parquet_batch(dir.path(), run_id, "TestTelemetry")?;
+    let a_array = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
+    let b_array = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
     assert!(a_array.is_valid(1));
     assert!(b_array.is_null(1));
     assert!(a_array.is_null(2));
@@ -90,20 +114,24 @@ async fn test_sparse_data_with_nulls() -> Result<()> {
 #[tokio::test]
 async fn test_duplicate_timestamp_overwrites() -> Result<()> {
     let dir = tempdir()?;
-    let uri = format!("file:///{}", dir.path().to_string_lossy().replace("\\", "/"));
     let run_id = "test_run_duplicates";
-    let workspace = FletchWorkspace::builder()
-        .uri(&uri)
-        .namespace(&["test_project", "test_suite"])
-        .build()?;
-    let mut stream = TestTelemetry::try_new(&workspace, run_id).await?;
+    let workspace = FletchWorkspace::builder().root(dir.path()).build()?;
+    let mut stream = Stream::<TestTelemetry>::try_new(&workspace, run_id).await?;
     stream.sensor_a(100, 1.0)?;
     stream.sensor_a(100, 9.9)?;
     stream.sensor_a(110, 2.0)?;
     stream.close()?;
-    let batch = read_parquet_batch(dir.path())?;
-    let ts_array = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
-    let val_array = batch.column(2).as_any().downcast_ref::<Float64Array>().unwrap();
+    let batch = read_parquet_batch(dir.path(), run_id, "TestTelemetry")?;
+    let ts_array = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    let val_array = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
     assert_eq!(batch.num_rows(), 2);
     assert_eq!(ts_array.value(0), 100);
     assert_eq!(val_array.value(0), 9.9);
@@ -113,16 +141,12 @@ async fn test_duplicate_timestamp_overwrites() -> Result<()> {
 #[tokio::test]
 async fn test_empty_flush() -> Result<()> {
     let dir = tempdir()?;
-    let uri = format!("file:///{}", dir.path().to_string_lossy().replace("\\", "/"));
     let run_id = "test_run_empty";
-    let workspace = FletchWorkspace::builder()
-        .uri(&uri)
-        .namespace(&["test_project", "test_suite"])
-        .build()?;
-    let stream = TestTelemetry::try_new(&workspace, run_id).await?;
+    let workspace = FletchWorkspace::builder().root(dir.path()).build()?;
+    let stream = Stream::<TestTelemetry>::try_new(&workspace, run_id).await?;
     let result = stream.close();
-    assert!(result.is_ok(), "Closing an empty stream should not fail");
-    let data_dir = dir.path().join("TestTelemetry/data");
+    assert!(result.is_ok(), "closing an empty stream should not fail");
+    let data_dir = dir.path().join("runs").join(run_id).join("TestTelemetry");
     if data_dir.exists() {
         let mut has_parquet = false;
         for entry in std::fs::read_dir(&data_dir)? {
@@ -132,7 +156,142 @@ async fn test_empty_flush() -> Result<()> {
                 break;
             }
         }
-        assert!(!has_parquet, "No parquet file should be written for empty streams");
+        assert!(
+            !has_parquet,
+            "no parquet file should be written for empty streams"
+        );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unsafe_run_and_stream_path_components_are_rejected() -> Result<()> {
+    let dir = tempdir()?;
+    let workspace = FletchWorkspace::builder().root(dir.path()).build()?;
+
+    let unsafe_run = FletchStreamBuilder::new(&workspace, "DigitalTelemetry")
+        .channel::<u8>("channel")?
+        .build_dynamic("../escape")
+        .await;
+    assert!(unsafe_run.is_err(), "run IDs must not escape the workspace");
+
+    let unsafe_stream = FletchStreamBuilder::new(&workspace, "../DigitalTelemetry")
+        .channel::<u8>("channel")?
+        .build_dynamic("run_001")
+        .await;
+    assert!(
+        unsafe_stream.is_err(),
+        "stream names must not escape the workspace"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn dynamic_builder_writes_file_metadata() -> Result<()> {
+    let dir = tempdir()?;
+    let run_id = "test_metadata";
+    let workspace = FletchWorkspace::builder().root(dir.path()).build()?;
+    let metadata = BTreeMap::from([
+        (
+            "modulo.test_id".to_string(),
+            "digital-edge-test".to_string(),
+        ),
+        ("modulo.device_id".to_string(), "dx0-001".to_string()),
+        ("fletch.run_id".to_string(), "spoofed_run".to_string()),
+    ]);
+    let mut stream = FletchStreamBuilder::new(&workspace, "DigitalTelemetry")
+        .channel::<u8>("channel")?
+        .channel::<bool>("rising")?
+        .metadata_pairs(metadata)
+        .build_dynamic(run_id)
+        .await?;
+
+    stream.write(42, "channel", 7_u8)?;
+    stream.write(42, "rising", true)?;
+    stream.close()?;
+
+    let file_path = first_parquet_file(dir.path(), run_id, "DigitalTelemetry")?;
+    let reader = SerializedFileReader::new(File::open(file_path)?)?;
+    let metadata = reader
+        .metadata()
+        .file_metadata()
+        .key_value_metadata()
+        .expect("metadata should be present");
+    let pairs = metadata
+        .iter()
+        .map(|entry| {
+            (
+                entry.key.as_str(),
+                entry.value.as_deref().unwrap_or_default(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(pairs.get("fletch.run_id"), Some(&run_id));
+    assert_eq!(pairs.get("fletch.stream_name"), Some(&"DigitalTelemetry"));
+    assert_eq!(pairs.get("modulo.test_id"), Some(&"digital-edge-test"));
+    assert_eq!(pairs.get("modulo.device_id"), Some(&"dx0-001"));
+    Ok(())
+}
+
+#[cfg(feature = "view")]
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_source_views_require_explicit_run_id() -> Result<()> {
+    let dir = tempdir()?;
+    let workspace = FletchWorkspace::builder().root(dir.path()).build()?;
+
+    let result = fletch::FletchViewBuilder::new(&workspace)
+        .add_source("TestTelemetry", &["sensor_a"])
+        .add_source("AuxiliaryTelemetry", &["reference"])
+        .build()
+        .await;
+
+    match result {
+        Ok(_) => panic!("multi-source views without an explicit run should fail"),
+        Err(err) => assert!(err.to_string().contains("run_id is required")),
+    }
+    Ok(())
+}
+
+#[cfg(feature = "view")]
+#[tokio::test(flavor = "multi_thread")]
+async fn view_joins_sources_for_explicit_run() -> Result<()> {
+    let dir = tempdir()?;
+    let workspace = FletchWorkspace::builder().root(dir.path()).build()?;
+
+    let mut telemetry = Stream::<TestTelemetry>::try_new(&workspace, "run_a").await?;
+    telemetry.sensor_a(100, 1.0)?;
+    telemetry.close()?;
+
+    let mut auxiliary = Stream::<AuxiliaryTelemetry>::try_new(&workspace, "run_a").await?;
+    auxiliary.reference(100, 10.0)?;
+    auxiliary.close()?;
+
+    let df = fletch::FletchViewBuilder::new(&workspace)
+        .run_id("run_a")
+        .add_source("TestTelemetry", &["sensor_a"])
+        .add_source("AuxiliaryTelemetry", &["reference"])
+        .with_relative_timestamp()
+        .build()
+        .await?
+        .collect()?;
+
+    let run_ids = df.column("run_id")?.str()?;
+    let sensor_values = df.column("sensor_a")?.f64()?;
+    let reference_values = df.column("reference")?.f64()?;
+    let relative_times = df.column("relative_time_ns")?.i64()?;
+    let mut rows = Vec::new();
+    for index in 0..df.height() {
+        rows.push((
+            run_ids.get(index).unwrap().to_string(),
+            sensor_values.get(index).unwrap(),
+            reference_values.get(index).unwrap(),
+            relative_times.get(index).unwrap(),
+        ));
+    }
+    rows.sort_by(|left, right| left.0.cmp(&right.0));
+
+    assert_eq!(rows, vec![("run_a".to_string(), 1.0, 10.0, 0)]);
     Ok(())
 }
