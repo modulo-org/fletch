@@ -1,55 +1,53 @@
 # Fletch Project Architecture
 
-## Crate
+## Crate Shape
 
-- Root `Cargo.toml` defines the `fletch` Rust crate.
-- The crate uses Rust 2024 and exposes a library API for telemetry ingestion, local cataloging, Parquet storage, and optional analytical views.
-- The default feature set keeps Polars out of the dependency graph.
-- The `view` feature enables Polars-backed exploration through `FletchViewBuilder` and `FletchView`.
+- Root `Cargo.toml` defines the `fletch` Rust crate on Rust 2024.
+- The crate exposes a library API for macro-generated telemetry ingestion, Apache Arrow batching, Parquet file writes, Iceberg catalog commits, and Polars analytical views.
+- Polars and `FletchViewBuilder` are currently compiled unconditionally; there is no `view` feature in `Cargo.toml`.
+- Public exports are centralized in `src/lib.rs`.
 
-## Key Areas
+## Modules
 
-- `src/lib.rs`: public exports and feature-gated view module.
-- `src/workspace.rs`: `FletchWorkspace`, workspace builders, local `file://` URI handling, partition layout rendering, and path-value sanitization.
-- `src/run.rs`: `FletchRun`, run metadata, flush policy, run creation, and catalog initialization.
-- `src/config.rs`: storage config derived from a run, schema fingerprinting, and relative Parquet path generation.
-- `src/macros.rs`: `fletch_schema!` macro that generates strongly typed stream structs and per-field logging methods.
-- `src/types.rs`: `FletchType` trait and supported Rust-to-Arrow field mappings.
-- `src/sink.rs`: background Arrow-to-Parquet writer, temporary spool files, content hashing, file catalog updates, and run completion.
-- `src/catalog.rs`: SQLite catalog creation, lightweight migrations, run/file/metadata records, and query indexes.
-- `src/view.rs`: optional Polars LazyFrame scans, metadata/run filtering, source selection, ASOF joins, relative timestamps, and CSV/Parquet exports.
-- `tests/`: integration tests for ingestion ordering, sparse rows, duplicate timestamps, empty streams, catalog metadata, file integrity, and feature-gated views.
-- `examples/`: runnable examples for telemetry capture and optional view construction.
+- `src/workspace.rs`: `FletchWorkspace`, `FletchWorkspaceBuilder`, required `file://` or future object-store URI, Iceberg namespace, and catalog name.
+- `src/config.rs`: `FletchConfig`, environment inference, local object-store setup, SQL Iceberg catalog initialization, namespace/table creation, Arrow-to-Iceberg schema mapping, and per-stream Parquet object paths.
+- `src/macros.rs`: `fletch_schema!`, generated stream structs, generated field logging methods, pending-row coalescing, batch creation, timestamp sorting, and stream close behavior.
+- `src/types.rs`: `FletchType` trait and supported Rust-to-Arrow builders. Current telemetry field types are `f64` and `i32`.
+- `src/sink.rs`: `BackgroundSink`, bounded channel, worker thread, Tokio runtime, temporary Parquet spool file, object-store upload, Iceberg `DataFile` metrics, and fast-append commit.
+- `src/view.rs`: `FletchViewBuilder`, Iceberg table scans, Polars `LazyFrame` construction, optional `run_id` filtering, source selection, ASOF joins, relative timestamps, and CSV/Parquet exports.
+- `tests/telemetry_sorting.rs`: integration coverage for sorted writes, sparse null rows, duplicate pending timestamp overwrite, and empty stream close.
+- `examples/accelerometer.rs`: end-to-end ingestion plus Polars view construction for accelerometer and power-supply streams.
 
 ## Data Model
 
-- A workspace is a local `file://` root plus a `project_id` and storage layout.
-- A run has a UUID `run_id`, project ID, start/end timestamps, optional repeated metadata key/value pairs, and a flush policy.
-- A stream maps to one macro-generated struct and one stream name.
-- Generated Arrow schemas start with `timestamp_ns` and dictionary-encoded `run_id`, followed by nullable telemetry fields.
-- Parquet files are written under a rendered partition path and tracked by the SQLite catalog.
-- The catalog stores runs, files, and run metadata in `fletch_catalog.sqlite`.
+- A workspace is a storage URI, an Iceberg namespace, and a catalog name.
+- A stream maps to one macro-generated Rust struct and one Iceberg table named after that struct.
+- A caller-provided `run_id` is stored in every row as a dictionary-encoded Arrow column.
+- Generated Arrow schemas start with non-null `timestamp_ns`, non-null dictionary `run_id`, then nullable telemetry fields.
+- Local workspaces store an Iceberg SQL catalog at `iceberg_catalog.db`.
+- Parquet data files are written under `{StreamName}/data/{uuid}.parquet` below the workspace root.
+- Iceberg table metadata tracks appended Parquet files; there is no separate Fletch run metadata table in the current implementation.
 
-## Ingestion Model
+## Ingestion Flow
 
-- Callers create a `FletchRun`, construct one or more macro-generated streams with `try_new`, write field values by timestamp, and call `close`.
-- Field writes sharing the same timestamp are coalesced into one pending row.
-- When the timestamp changes, the pending row is committed and may be flushed according to the run's flush policy.
-- Before each batch is sent to the sink, rows are sorted by `timestamp_ns`.
-- `BackgroundSink` writes batches on a worker thread through a Tokio runtime and commits catalog metadata after a successful non-empty file write.
-- Empty streams close without creating Parquet files, while still finishing the run record.
+1. A caller builds a `FletchWorkspace` with `.uri(...)`, `.namespace(...)`, and optional `.catalog(...)`.
+2. A generated stream calls `FletchConfig::init`, which creates or loads the namespace and table for that stream.
+3. Generated field methods update the pending row for the current timestamp or commit it when the timestamp changes.
+4. `flush_batch` finishes Arrow builders, creates a `RecordBatch`, sorts by `timestamp_ns`, and sends the batch to `BackgroundSink`.
+5. `BackgroundSink` writes all received batches for that stream to one Parquet spool file, uploads it through `ObjectStore`, and commits an Iceberg fast append.
+6. `close` flushes the final pending row and joins the worker thread. Empty streams close without writing a data file.
 
-## View Model
+## View Flow
 
-- `FletchViewBuilder` is available only with the `view` feature.
-- Views resolve eligible Parquet files through the catalog using the workspace project, explicit run ID, or metadata filters.
-- Each source selects `timestamp_ns`, `run_id`, and requested telemetry columns.
-- Multiple sources are joined with Polars ASOF joins using `timestamp_ns` and `run_id`.
-- Optional relative timestamps are derived per run.
-- Views can be collected into a DataFrame or exported to CSV/Parquet.
+1. `FletchViewBuilder::new(&workspace)` collects one or more stream table sources.
+2. `build` loads the local SQL Iceberg catalog and resolves data files through table scans.
+3. Each source becomes a sorted Polars `LazyFrame` filtered by `run_id` when requested.
+4. Multiple sources are joined with backward ASOF joins on `timestamp_ns` and grouped by `run_id`.
+5. `with_relative_timestamp` adds `relative_time_ns` from each row's timestamp minus the per-run minimum timestamp.
+6. `FletchView` can be collected as a `DataFrame`, converted into a `LazyFrame`, or exported to CSV/Parquet.
 
 ## Modulo Workspace Role
 
-- Fletch owns telemetry-library behavior and local analytical data storage.
-- It should remain decoupled from `modulo-sdk` protocol definitions and `modulo-firmware` hardware execution unless a task explicitly connects hardware telemetry to Fletch ingestion.
-- Bitshift or other UI/data consumers should treat Fletch outputs as cataloged Parquet/data-view artifacts rather than duplicating Fletch storage rules.
+- Fletch owns telemetry-library behavior, Iceberg-backed cataloging, Parquet data files, and Polars analytical views.
+- Keep Fletch decoupled from `modulo-sdk` protocol definitions and `modulo-firmware` hardware execution unless a task explicitly connects hardware telemetry to Fletch ingestion.
+- Bitshift and other UI/data consumers should treat Fletch outputs as cataloged Parquet and view artifacts rather than duplicating Fletch storage or join rules.

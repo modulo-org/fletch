@@ -15,21 +15,22 @@ Local instructions in this file override shared and workspace instructions.
 
 ## Repository Role
 
-`fletch` is the Rust telemetry logging, local catalog, Parquet storage, and
+`fletch` is the Rust telemetry logging, Iceberg-backed catalog, Parquet storage, and
 sensor-fusion library for HIL and test-engineering data.
 
 - `fletch_schema!` generates strongly typed ingestion streams backed by Apache Arrow builders.
-- `FletchRun` and `FletchWorkspace` own run setup, metadata, local workspace paths, and storage layout.
-- The SQLite catalog tracks runs, run metadata, and written Parquet files.
-- The optional `view` feature enables Polars-backed analytical views and time-aligned joins.
+- `FletchWorkspace` owns workspace URIs, Iceberg namespaces, and catalog naming.
+- The embedded SQL Iceberg catalog tracks tables and appended Parquet data files.
+- `BackgroundSink` writes Parquet files and commits Iceberg fast-append transactions.
+- `FletchViewBuilder` uses Polars for analytical views and time-aligned joins.
 
 ## Data Rules
 
 - Keep `timestamp_ns` and `run_id` as stable leading columns in generated telemetry schemas.
-- Keep stream names, schema hashes, storage paths, catalog rows, row counts, timestamp bounds, file sizes, and content hashes aligned with the written Parquet files.
-- Preserve sparse-row semantics: same-timestamp field writes coalesce into one row, missing fields remain null, and duplicate field writes keep the latest value.
+- Keep stream names, Iceberg table schemas, storage paths, row counts, file sizes, and Parquet metrics aligned with the written files.
+- Preserve pending-row semantics: field writes for the current timestamp coalesce into one row, missing fields remain null, and duplicate field writes for that pending timestamp keep the latest value.
 - Keep local workspace roots represented as `file://` URIs at public boundaries and convert to filesystem paths at storage boundaries.
-- Keep the Polars view layer behind the `view` feature.
+- Do not present `s3://` storage as complete until catalog initialization and tests exist.
 
 ## Commands
 
@@ -37,9 +38,8 @@ Run commands from the repository root unless a task is scoped to a specific file
 
 - Format: `cargo fmt`
 - Test: `cargo test`
-- Test views: `cargo test --features view`
 - Lint: `cargo clippy --all-targets --all-features`
-- Run examples as needed, for example `cargo run --example accelerometer --features view`
+- Run examples as needed, for example `cargo run --example accelerometer`
 
 ## Branching and Pull Requests
 
