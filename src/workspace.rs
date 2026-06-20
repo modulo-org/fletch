@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Default, Clone)]
 pub struct FletchWorkspaceBuilder {
@@ -37,5 +37,20 @@ impl FletchWorkspace {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+}
+
+pub(crate) fn validate_path_component(name: &str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        return Err(anyhow!("{} must not be empty", name));
+    }
+    if value.contains('/') || value.contains('\\') {
+        return Err(anyhow!("{} must not contain path separators", name));
+    }
+
+    let mut components = Path::new(value).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(_)), None) => Ok(()),
+        _ => Err(anyhow!("{} must be a single relative path component", name)),
     }
 }

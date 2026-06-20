@@ -28,6 +28,7 @@ library for HIL and test-engineering data.
 
 - Keep `timestamp_ns` as the stable leading column in generated telemetry schemas.
 - Keep stream names, storage paths, and file-level metadata aligned with the written Parquet files.
+- Keep Fletch-owned `fletch.*` metadata authoritative over user-provided metadata.
 - Preserve sparse-row semantics: same-timestamp field writes coalesce into one row, missing fields remain null, and duplicate field writes keep the latest value.
 - Keep local workspace roots as filesystem paths at public boundaries.
 - Keep the Polars view layer behind the `view` feature.

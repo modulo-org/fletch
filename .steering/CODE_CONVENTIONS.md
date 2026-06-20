@@ -16,7 +16,7 @@
 - Keep local workspace roots represented as filesystem paths at public boundaries.
 - Preserve the default layout semantics: run, stream, and unique Parquet file names.
 - Sanitize path components before rendering storage layout values.
-- Store user metadata as Parquet file-level string key/value pairs.
+- Store user metadata as Parquet file-level string key/value pairs, but keep `fletch.*` metadata owned by Fletch.
 - Avoid adding sidecar database/catalog dependencies unless the storage contract is intentionally expanded.
 - For schema or storage layout changes, include a migration path that preserves existing local workspaces where practical.
 
@@ -28,7 +28,8 @@
 - Ensure empty streams can close cleanly without writing Parquet files.
 - Keep the Polars-backed view layer behind the `view` feature.
 - Preserve run filtering by `run_id` so views do not accidentally cross runs.
-- Use ASOF joins intentionally for time-aligned multi-stream views and keep join-by-run semantics explicit.
+- Materialize `run_id` in views from storage layout or metadata.
+- Require an explicit `run_id` for multi-source views, then use ASOF joins intentionally for time-aligned streams inside that run.
 
 ## Verification
 

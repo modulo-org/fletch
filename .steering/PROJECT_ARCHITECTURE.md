@@ -41,10 +41,10 @@
 ## View Model
 
 - `FletchViewBuilder` is available only with the `view` feature.
-- Views resolve eligible Parquet files from the local root using the explicit run ID or all runs.
-- Each source selects `timestamp_ns` and requested telemetry columns.
-- Multiple sources are joined with Polars ASOF joins using `timestamp_ns`.
-- Optional relative timestamps are derived from the selected rows.
+- Views resolve eligible Parquet files from the local root using an explicit run ID, or all runs for single-source views.
+- Each source materializes `run_id` from the storage layout and selects `timestamp_ns`, `run_id`, and requested telemetry columns.
+- Multiple sources require an explicit run ID and are joined with Polars ASOF joins using `timestamp_ns`.
+- Optional relative timestamps are derived per run from the selected rows.
 - Views can be collected into a DataFrame or exported to CSV/Parquet.
 
 ## Modulo Workspace Role

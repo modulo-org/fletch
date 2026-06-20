@@ -39,10 +39,10 @@ pub fn derive_fletch_schema(input: TokenStream) -> TokenStream {
             builder = builder.channel::<#ty>(#channel_name)?;
         });
         method_sigs.push(quote! {
-            fn #name(&mut self, timestamp_ns: i64, value: #ty) -> anyhow::Result<()>;
+            fn #name(&mut self, timestamp_ns: i64, value: #ty) -> fletch::Result<()>;
         });
         methods.push(quote! {
-            fn #name(&mut self, timestamp_ns: i64, value: #ty) -> anyhow::Result<()> {
+            fn #name(&mut self, timestamp_ns: i64, value: #ty) -> fletch::Result<()> {
                 self.write(timestamp_ns, #channel_name, value)
             }
         });
@@ -56,7 +56,7 @@ pub fn derive_fletch_schema(input: TokenStream) -> TokenStream {
 
             fn configure_builder(
                 mut builder: fletch::FletchStreamBuilder,
-            ) -> anyhow::Result<fletch::FletchStreamBuilder> {
+            ) -> fletch::Result<fletch::FletchStreamBuilder> {
                 #(#channel_defs)*
                 Ok(builder)
             }

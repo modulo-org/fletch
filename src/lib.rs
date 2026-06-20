@@ -6,6 +6,8 @@ mod types;
 mod view;
 mod workspace;
 
+pub type Result<T> = anyhow::Result<T>;
+
 pub use config::*;
 pub use fletch_derive::FletchSchema;
 pub use sink::*;

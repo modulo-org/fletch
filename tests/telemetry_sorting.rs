@@ -14,6 +14,11 @@ struct TestTelemetry {
     sensor_b: f64,
 }
 
+#[derive(FletchSchema)]
+struct AuxiliaryTelemetry {
+    reference: f64,
+}
+
 fn read_parquet_batch(
     dir: &Path,
     run_id: &str,
@@ -160,6 +165,29 @@ async fn test_empty_flush() -> Result<()> {
 }
 
 #[tokio::test]
+async fn unsafe_run_and_stream_path_components_are_rejected() -> Result<()> {
+    let dir = tempdir()?;
+    let workspace = FletchWorkspace::builder().root(dir.path()).build()?;
+
+    let unsafe_run = FletchStreamBuilder::new(&workspace, "DigitalTelemetry")
+        .channel::<u8>("channel")?
+        .build_dynamic("../escape")
+        .await;
+    assert!(unsafe_run.is_err(), "run IDs must not escape the workspace");
+
+    let unsafe_stream = FletchStreamBuilder::new(&workspace, "../DigitalTelemetry")
+        .channel::<u8>("channel")?
+        .build_dynamic("run_001")
+        .await;
+    assert!(
+        unsafe_stream.is_err(),
+        "stream names must not escape the workspace"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn dynamic_builder_writes_file_metadata() -> Result<()> {
     let dir = tempdir()?;
     let run_id = "test_metadata";
@@ -170,6 +198,7 @@ async fn dynamic_builder_writes_file_metadata() -> Result<()> {
             "digital-edge-test".to_string(),
         ),
         ("modulo.device_id".to_string(), "dx0-001".to_string()),
+        ("fletch.run_id".to_string(), "spoofed_run".to_string()),
     ]);
     let mut stream = FletchStreamBuilder::new(&workspace, "DigitalTelemetry")
         .channel::<u8>("channel")?
@@ -203,5 +232,66 @@ async fn dynamic_builder_writes_file_metadata() -> Result<()> {
     assert_eq!(pairs.get("fletch.stream_name"), Some(&"DigitalTelemetry"));
     assert_eq!(pairs.get("modulo.test_id"), Some(&"digital-edge-test"));
     assert_eq!(pairs.get("modulo.device_id"), Some(&"dx0-001"));
+    Ok(())
+}
+
+#[cfg(feature = "view")]
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_source_views_require_explicit_run_id() -> Result<()> {
+    let dir = tempdir()?;
+    let workspace = FletchWorkspace::builder().root(dir.path()).build()?;
+
+    let result = fletch::FletchViewBuilder::new(&workspace)
+        .add_source("TestTelemetry", &["sensor_a"])
+        .add_source("AuxiliaryTelemetry", &["reference"])
+        .build()
+        .await;
+
+    match result {
+        Ok(_) => panic!("multi-source views without an explicit run should fail"),
+        Err(err) => assert!(err.to_string().contains("run_id is required")),
+    }
+    Ok(())
+}
+
+#[cfg(feature = "view")]
+#[tokio::test(flavor = "multi_thread")]
+async fn view_joins_sources_for_explicit_run() -> Result<()> {
+    let dir = tempdir()?;
+    let workspace = FletchWorkspace::builder().root(dir.path()).build()?;
+
+    let mut telemetry = Stream::<TestTelemetry>::try_new(&workspace, "run_a").await?;
+    telemetry.sensor_a(100, 1.0)?;
+    telemetry.close()?;
+
+    let mut auxiliary = Stream::<AuxiliaryTelemetry>::try_new(&workspace, "run_a").await?;
+    auxiliary.reference(100, 10.0)?;
+    auxiliary.close()?;
+
+    let df = fletch::FletchViewBuilder::new(&workspace)
+        .run_id("run_a")
+        .add_source("TestTelemetry", &["sensor_a"])
+        .add_source("AuxiliaryTelemetry", &["reference"])
+        .with_relative_timestamp()
+        .build()
+        .await?
+        .collect()?;
+
+    let run_ids = df.column("run_id")?.str()?;
+    let sensor_values = df.column("sensor_a")?.f64()?;
+    let reference_values = df.column("reference")?.f64()?;
+    let relative_times = df.column("relative_time_ns")?.i64()?;
+    let mut rows = Vec::new();
+    for index in 0..df.height() {
+        rows.push((
+            run_ids.get(index).unwrap().to_string(),
+            sensor_values.get(index).unwrap(),
+            reference_values.get(index).unwrap(),
+            relative_times.get(index).unwrap(),
+        ));
+    }
+    rows.sort_by(|left, right| left.0.cmp(&right.0));
+
+    assert_eq!(rows, vec![("run_a".to_string(), 1.0, 10.0, 0)]);
     Ok(())
 }
