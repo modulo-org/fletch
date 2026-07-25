@@ -45,7 +45,6 @@ Run commands from the repository root unless a task is scoped to a specific file
 
 ## Branching and Pull Requests
 
-- Follow `../agent-instructions/gitflow.md` and `../agent-instructions/todoist.md` when available.
 - If this standalone repository does not have a `staging` branch, open pull requests against its configured default branch.
 
 ## Knowledge Base
